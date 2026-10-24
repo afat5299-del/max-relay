@@ -7,7 +7,7 @@ import re
 import sqlite3
 from contextlib import closing
 from typing import Optional
-
+from pathlib import Path
 import aiohttp
 import certifi
 import ssl
@@ -167,7 +167,11 @@ async def publish(request: Request, x_relay_secret: str = Header(default="")):
     results = []
 
     ssl_context = ssl.create_default_context(cafile=certifi.where())
-    connector = aiohttp.TCPConnector(ssl=ssl_context)
+
+certificate_path = Path(__file__).with_name("mincifry_bundle.pem")
+ssl_context.load_verify_locations(cafile=str(certificate_path))
+
+connector = aiohttp.TCPConnector(ssl=ssl_context)
 
     async with aiohttp.ClientSession(connector=connector) as session:
         if photo:
