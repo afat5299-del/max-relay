@@ -168,7 +168,7 @@ async def publish(request: Request, x_relay_secret: str = Header(default="")):
 
     ssl_context = ssl.create_default_context(cafile=certifi.where())
 
-certificate_path = Path(__file__).with_name("mincifry_bundle.pem")
+certificate_path = Path(__file__).with_name("russiantrustedca.pem")
 ssl_context.load_verify_locations(cafile=str(certificate_path))
 
 connector = aiohttp.TCPConnector(ssl=ssl_context)
