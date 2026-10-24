@@ -9,6 +9,8 @@ from contextlib import closing
 from typing import Optional
 
 import aiohttp
+import certifi
+import ssl
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
@@ -159,7 +161,10 @@ async def publish(request: Request, x_relay_secret: str = Header(default="")):
         raise HTTPException(status_code=400, detail="Пустой пост")
     image_token = None
     results = []
-    async with aiohttp.ClientSession() as session:
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+connector = aiohttp.TCPConnector(ssl=ssl_context)
+
+async with aiohttp.ClientSession(connector=connector) as session:
         if photo:
             image_token = await upload_image(session, photo, getattr(upload, "filename", "product.jpg"))
         # Публикация в MAX-канал — если задан его chat_id и бот добавлен администратором.
