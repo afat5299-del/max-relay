@@ -159,18 +159,22 @@ async def upload_image(
         except ValueError:
             result = {}
 
-        if isinstance(result, dict):
-            photos = result.get("photos") or {}
-            photo_ids = (
-                photos.get("photoIds", {})
-                if isinstance(photos, dict)
-                else {}
-            )
+        
+if isinstance(result, dict):
+    log.info(
+        "MAX upload response structure: %r",
+        result.get("photos")
+    )
 
-            if isinstance(photo_ids, dict):
-                token = token or photo_ids.get("token")
+    photos = result.get("photos") or {}
 
-            token = token or result.get("token")
+    if isinstance(photos, dict):
+        photo_ids = photos.get("photoIds") or {}
+
+        if isinstance(photo_ids, dict):
+            token = token or photo_ids.get("token")
+
+    token = token or result.get("token")
 
     if not token:
         # Не выводим URL загрузки: в нём могут быть секретные параметры.
