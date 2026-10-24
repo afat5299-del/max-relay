@@ -147,6 +147,7 @@ async def max_webhook(request: Request):
     return {"ok": True}
 
 
+
 @app.post("/publish")
 async def publish(request: Request, x_relay_secret: str = Header(default="")):
     if not RELAY_SECRET or x_relay_secret != RELAY_SECRET:
@@ -167,11 +168,16 @@ async def publish(request: Request, x_relay_secret: str = Header(default="")):
     results = []
 
     ssl_context = ssl.create_default_context(cafile=certifi.where())
+    certificate_path = Path(__file__).with_name("russiantrustedca.pem")
 
-certificate_path = Path(__file__).with_name("russiantrustedca.pem")
-ssl_context.load_verify_locations(cafile=str(certificate_path))
+    if not certificate_path.exists():
+        raise HTTPException(
+            status_code=500,
+            detail="Не найден файл сертификатов russiantrustedca.pem"
+        )
 
-connector = aiohttp.TCPConnector(ssl=ssl_context)
+    ssl_context.load_verify_locations(cafile=str(certificate_path))
+    connector = aiohttp.TCPConnector(ssl=ssl_context)
 
     async with aiohttp.ClientSession(connector=connector) as session:
         if photo:
