@@ -169,7 +169,7 @@ async def publish(request: Request, x_relay_secret: str = Header(default="")):
     results = []
 
     ssl_context = ssl.create_default_context(cafile=certifi.where())
-    certificate_path = Path(__file__).with_name("russiantrustedca.pem")
+    certificate_path = Path(__file__).with_name("mincifry_bundle.pem")
 
     if not certificate_path.exists():
         raise HTTPException(
