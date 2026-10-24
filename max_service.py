@@ -148,6 +148,7 @@ async def max_webhook(request: Request):
 
 
 
+
 @app.post("/publish")
 async def publish(request: Request, x_relay_secret: str = Header(default="")):
     if not RELAY_SECRET or x_relay_secret != RELAY_SECRET:
@@ -187,7 +188,6 @@ async def publish(request: Request, x_relay_secret: str = Header(default="")):
                 getattr(upload, "filename", "product.jpg")
             )
 
-        # Публикация в MAX-канал
         if MAX_CHANNEL_ID:
             await send_to_target(
                 session,
@@ -197,7 +197,6 @@ async def publish(request: Request, x_relay_secret: str = Header(default="")):
             )
             results.append("канал MAX")
 
-        # Рассылка пользователям, которые запускали бота
         if BROADCAST_TO_USERS:
             sent = 0
             failed = 0
@@ -213,7 +212,6 @@ async def publish(request: Request, x_relay_secret: str = Header(default="")):
                     )
                     sent += 1
                     await asyncio.sleep(0.55)
-
                 except Exception as exc:
                     failed += 1
                     log.warning(
