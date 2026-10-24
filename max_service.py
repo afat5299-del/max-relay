@@ -93,27 +93,95 @@ async def max_api_request(session: aiohttp.ClientSession, method: str, path: str
             return {"raw": body}
 
 
-async def upload_image(session: aiohttp.ClientSession, photo: bytes, filename: str = "product.jpg") -> str:
-    info = await max_api_request(session, "POST", "/uploads", params={"type": "image"})
+
+async def upload_image(
+    session: aiohttp.ClientSession,
+    photo: bytes,
+    filename: str = "product.jpg"
+) -> str:
+    import json
+    from urllib.parse import urlparse, parse_qs
+
+    # Шаг 1. Получаем адрес загрузки и возможный токен.
+    info = await max_api_request(
+        session,
+        "POST",
+        "/uploads",
+        params={"type": "image"}
+    )
+
+    if not isinstance(info, dict):
+        raise RuntimeError(
+            f"MAX вернул неожиданный ответ /uploads: {type(info).__name__}"
+        )
+
     upload_url = info.get("url")
     token = info.get("token")
+
     if not upload_url:
-        raise RuntimeError(f"MAX не вернул URL загрузки изображения: {info}")
+        raise RuntimeError(
+            f"MAX не вернул URL загрузки. Поля ответа: {list(info.keys())}"
+        )
+
+    # Иногда токен изображения содержится в параметрах URL.
+    query = parse_qs(urlparse(upload_url).query)
+    token = (
+        token
+        or query.get("token", [None])[0]
+        or query.get("mediafile_token", [None])[0]
+    )
+
+    # Шаг 2. Загружаем фотографию.
     form = aiohttp.FormData()
-    form.add_field("data", photo, filename=filename, content_type="image/jpeg")
-    async with session.post(upload_url, data=form, headers={"Authorization": MAX_TOKEN}, timeout=aiohttp.ClientTimeout(total=60)) as response:
+    form.add_field(
+        "data",
+        photo,
+        filename=filename,
+        content_type="image/jpeg"
+    )
+
+    async with session.post(
+        upload_url,
+        data=form,
+        headers={"Authorization": MAX_TOKEN},
+        timeout=aiohttp.ClientTimeout(total=60)
+    ) as response:
         body = await response.text()
+
         if response.status >= 400:
-            raise RuntimeError(f"Ошибка загрузки изображения в MAX HTTP {response.status}: {body[:300]}")
+            raise RuntimeError(
+                f"Ошибка загрузки изображения в MAX HTTP "
+                f"{response.status}: {body[:500]}"
+            )
+
         try:
-            import json
             result = json.loads(body) if body else {}
-            token = result.get("photos", {}).get("photoIds", {}).get("token") or result.get("token") or token
         except ValueError:
-            pass
+            result = {}
+
+        if isinstance(result, dict):
+            photos = result.get("photos") or {}
+            photo_ids = (
+                photos.get("photoIds", {})
+                if isinstance(photos, dict)
+                else {}
+            )
+
+            if isinstance(photo_ids, dict):
+                token = token or photo_ids.get("token")
+
+            token = token or result.get("token")
+
     if not token:
-        raise RuntimeError("MAX не вернул токен загруженного изображения")
-    # MAX может обрабатывать изображение после загрузки; короткая пауза снижает риск attachment.not.ready.
+        # Не выводим URL загрузки: в нём могут быть секретные параметры.
+        raise RuntimeError(
+            "MAX загрузил файл, но токен не найден. "
+            f"Поля ответа /uploads: {list(info.keys())}; "
+            f"HTTP загрузки: {response.status}; "
+            f"поля ответа загрузки: "
+            f"{list(result.keys()) if isinstance(result, dict) else 'не JSON'}"
+        )
+
     await asyncio.sleep(1.5)
     return token
 
