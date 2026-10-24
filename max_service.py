@@ -161,10 +161,7 @@ async def upload_image(
 
         
 if isinstance(result, dict):
-    log.info(
-        "MAX upload response structure: %r",
-        result.get("photos")
-    )
+    log.warning("MAX UPLOAD RESPONSE: %r", result)
 
     photos = result.get("photos") or {}
 
