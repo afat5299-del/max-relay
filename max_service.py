@@ -94,15 +94,14 @@ async def max_api_request(session: aiohttp.ClientSession, method: str, path: str
 
 
 
+
 async def upload_image(
     session: aiohttp.ClientSession,
     photo: bytes,
     filename: str = "product.jpg"
 ) -> str:
     import json
-    from urllib.parse import urlparse, parse_qs
 
-    # Шаг 1. Получаем адрес загрузки и возможный токен.
     info = await max_api_request(
         session,
         "POST",
@@ -111,9 +110,7 @@ async def upload_image(
     )
 
     if not isinstance(info, dict):
-        raise RuntimeError(
-            f"MAX вернул неожиданный ответ /uploads: {type(info).__name__}"
-        )
+        raise RuntimeError("MAX вернул неожиданный ответ при запросе /uploads")
 
     upload_url = info.get("url")
     token = info.get("token")
@@ -123,15 +120,6 @@ async def upload_image(
             f"MAX не вернул URL загрузки. Поля ответа: {list(info.keys())}"
         )
 
-    # Иногда токен изображения содержится в параметрах URL.
-    query = parse_qs(urlparse(upload_url).query)
-    token = (
-        token
-        or query.get("token", [None])[0]
-        or query.get("mediafile_token", [None])[0]
-    )
-
-    # Шаг 2. Загружаем фотографию.
     form = aiohttp.FormData()
     form.add_field(
         "data",
@@ -151,7 +139,7 @@ async def upload_image(
         if response.status >= 400:
             raise RuntimeError(
                 f"Ошибка загрузки изображения в MAX HTTP "
-                f"{response.status}: {body[:500]}"
+                f"{response.status}: {body[:300]}"
             )
 
         try:
@@ -159,28 +147,21 @@ async def upload_image(
         except ValueError:
             result = {}
 
-        
-if isinstance(result, dict):
-    log.warning("MAX UPLOAD RESPONSE: %r", result)
+        log.warning("MAX UPLOAD RESPONSE: %r", result)
 
-    photos = result.get("photos") or {}
+        if isinstance(result, dict):
+            photos = result.get("photos") or {}
+            if isinstance(photos, dict):
+                photo_ids = photos.get("photoIds") or {}
+                if isinstance(photo_ids, dict):
+                    token = token or photo_ids.get("token")
 
-    if isinstance(photos, dict):
-        photo_ids = photos.get("photoIds") or {}
-
-        if isinstance(photo_ids, dict):
-            token = token or photo_ids.get("token")
-
-    token = token or result.get("token")
+            token = token or result.get("token")
 
     if not token:
-        # Не выводим URL загрузки: в нём могут быть секретные параметры.
         raise RuntimeError(
-            "MAX загрузил файл, но токен не найден. "
-            f"Поля ответа /uploads: {list(info.keys())}; "
-            f"HTTP загрузки: {response.status}; "
-            f"поля ответа загрузки: "
-            f"{list(result.keys()) if isinstance(result, dict) else 'не JSON'}"
+            "MAX загрузил изображение, но токен не найден. "
+            "Подробности смотри в логе MAX UPLOAD RESPONSE."
         )
 
     await asyncio.sleep(1.5)
