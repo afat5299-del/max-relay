@@ -151,45 +151,90 @@ async def max_webhook(request: Request):
 async def publish(request: Request, x_relay_secret: str = Header(default="")):
     if not RELAY_SECRET or x_relay_secret != RELAY_SECRET:
         raise HTTPException(status_code=401, detail="Unauthorized relay")
+
     if not MAX_TOKEN:
         raise HTTPException(status_code=503, detail="MAX_TOKEN не настроен")
+
     form = await request.form()
     text = adapt_for_max(str(form.get("text") or ""))
     upload = form.get("photo")
     photo = await upload.read() if upload and hasattr(upload, "read") else None
+
     if not text and not photo:
         raise HTTPException(status_code=400, detail="Пустой пост")
+
     image_token = None
     results = []
-    ssl_context = ssl.create_default_context(cafile=certifi.where())
-connector = aiohttp.TCPConnector(ssl=ssl_context)
 
-async with aiohttp.ClientSession(connector=connector) as session:
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    connector = aiohttp.TCPConnector(ssl=ssl_context)
+
+    async with aiohttp.ClientSession(connector=connector) as session:
         if photo:
-            image_token = await upload_image(session, photo, getattr(upload, "filename", "product.jpg"))
-        # Публикация в MAX-канал — если задан его chat_id и бот добавлен администратором.
+            image_token = await upload_image(
+                session,
+                photo,
+                getattr(upload, "filename", "product.jpg")
+            )
+
+        # Публикация в MAX-канал
         if MAX_CHANNEL_ID:
-            await send_to_target(session, MAX_CHANNEL_ID, text, image_token)
+            await send_to_target(
+                session,
+                MAX_CHANNEL_ID,
+                text,
+                image_token
+            )
             results.append("канал MAX")
-        # Рассылка тем пользователям, которые запускали бота и не остановили его.
+
+        # Рассылка пользователям, которые запускали бота
         if BROADCAST_TO_USERS:
             sent = 0
             failed = 0
+
             for user_id in get_subscribers():
                 try:
-                    await send_to_target(session, str(user_id), text, image_token, is_user=True)
+                    await send_to_target(
+                        session,
+                        str(user_id),
+                        text,
+                        image_token,
+                        is_user=True
+                    )
                     sent += 1
-                    await asyncio.sleep(0.55)  # соблюдаем лимит на один диалог
+                    await asyncio.sleep(0.55)
+
                 except Exception as exc:
                     failed += 1
-                    log.warning("Не удалось отправить MAX-пользователю %s: %s", user_id, exc)
-            results.append(f"личные сообщения MAX: отправлено {sent}, ошибок {failed}")
+                    log.warning(
+                        "Не удалось отправить MAX-пользователю %s: %s",
+                        user_id,
+                        exc
+                    )
+
+            results.append(
+                f"личные сообщения MAX: отправлено {sent}, ошибок {failed}"
+            )
+
     if not results:
-        raise HTTPException(status_code=503, detail="Укажи MAX_CHANNEL_ID и/или включи MAX_BROADCAST_TO_USERS")
-    return JSONResponse({"ok": True, "message": "Пост передан в " + "; ".join(results)})
+        raise HTTPException(
+            status_code=503,
+            detail="Укажи MAX_CHANNEL_ID и/или включи MAX_BROADCAST_TO_USERS"
+        )
+
+    return JSONResponse({
+        "ok": True,
+        "message": "Пост передан в " + "; ".join(results)
+    })
 
 
 if __name__ == "__main__":
     import uvicorn
+
     db_init()
-    uvicorn.run("max_service:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+
+    uvicorn.run(
+        "max_service:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8000"))
+    )
