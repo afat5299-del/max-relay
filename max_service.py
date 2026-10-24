@@ -147,14 +147,34 @@ async def upload_image(
         except ValueError:
             result = {}
 
-        log.warning("MAX UPLOAD RESPONSE: %r", result)
+        
+        log.warning(
+            "MAX UPLOAD RESPONSE: %s",
+            json.dumps(result, ensure_ascii=False)
+        )
 
         if isinstance(result, dict):
-            photos = result.get("photos") or {}
+            photos = result.get("photos")
+
+            log.warning(
+                "MAX PHOTOS TYPE: %s; VALUE: %s",
+                type(photos).__name__,
+                repr(photos)[:2000]
+            )
+
             if isinstance(photos, dict):
-                photo_ids = photos.get("photoIds") or {}
+                photo_ids = photos.get("photoIds")
+
                 if isinstance(photo_ids, dict):
-                    token = token or photo_ids.get("token")
+                    token = (
+                        token
+                        or photo_ids.get("token")
+                    )
+
+                elif isinstance(photo_ids, str):
+                    token = token or photo_ids
+
+                token = token or photos.get("token")
 
             token = token or result.get("token")
 
