@@ -174,7 +174,7 @@ async def publish(request: Request, x_relay_secret: str = Header(default="")):
     if not certificate_path.exists():
         raise HTTPException(
             status_code=500,
-            detail="Не найден файл сертификатов russiantrustedca.pem"
+            detail="Не найден файл сертификатов mincifry_bundle.pem"
         )
 
     ssl_context.load_verify_locations(cafile=str(certificate_path))
