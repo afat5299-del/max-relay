@@ -140,6 +140,17 @@ async def upload_image(
     return token
 
 
+def adapt_for_max(text: str) -> str:
+    """Адаптирует текст поста для публикации в MAX."""
+    text = html.escape(text, quote=False)
+
+    # Преобразуем ссылки Telegram в ссылки MAX.
+    text = text.replace(
+        html.escape(TELEGRAM_URL, quote=False),
+        html.escape(MAX_URL, quote=False)
+    )
+
+    return text
 
 async def send_to_target(
     session: aiohttp.ClientSession,
