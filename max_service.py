@@ -182,6 +182,39 @@ async def send_to_target(
         )
         raise
 
+def db_init() -> None:
+    with closing(sqlite3.connect(DB_PATH)) as con:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subscribers (
+                user_id INTEGER PRIMARY KEY,
+                active INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        con.commit()
+
+
+def save_subscriber(user_id: int, active: bool = True) -> None:
+    with closing(sqlite3.connect(DB_PATH)) as con:
+        con.execute(
+            """
+            INSERT INTO subscribers (user_id, active)
+            VALUES (?, ?)
+            ON CONFLICT(user_id)
+            DO UPDATE SET active=excluded.active
+            """,
+            (user_id, 1 if active else 0),
+        )
+        con.commit()
+
+
+def get_subscribers() -> list[int]:
+    with closing(sqlite3.connect(DB_PATH)) as con:
+        rows = con.execute(
+            "SELECT user_id FROM subscribers WHERE active=1"
+        ).fetchall()
+    return [int(row[0]) for row in rows]
 
 @app.get("/health")
 async def health():
