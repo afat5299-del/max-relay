@@ -60,25 +60,45 @@ def telegram_file_bytes(file_id):
     return response.content, os.path.basename(file_path) or "image.jpg"
 
 
+def _find_media_token(value):
+    """Find a media token in the different response shapes used by MAX."""
+    if isinstance(value, dict):
+        token = value.get("token")
+        if isinstance(token, str) and token.strip():
+            return token.strip()
+        for child in value.values():
+            found = _find_media_token(child)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _find_media_token(child)
+            if found:
+                return found
+    return None
+
+
 def upload_image_to_max(file_bytes, filename):
     """Upload an image to MAX and return its media token."""
-    headers = {"Authorization": MAX_TOKEN}
     response = requests.post(
         f"{MAX_API}/uploads",
         params={"type": "image"},
-        headers=headers,
+        headers={"Authorization": MAX_TOKEN},
         timeout=35,
         verify=CA_BUNDLE,
     )
-    response.raise_for_status()
-    upload_info = response.json()
-    upload_url = upload_info.get("url")
-    if not upload_url:
+    try:
+        upload_info = response.json()
+    except ValueError:
+        upload_info = response.text[:1000]
+    if not response.ok:
+        raise RuntimeError(f"MAX /uploads HTTP {response.status_code}: {upload_info}")
+    if not isinstance(upload_info, dict) or not upload_info.get("url"):
         raise RuntimeError(f"MAX не вернул URL для загрузки изображения: {upload_info}")
 
+    # MAX's upload URL is a signed URL; upload the file exactly as documented.
     upload_response = requests.post(
-        upload_url,
-        headers={"Authorization": MAX_TOKEN},
+        upload_info["url"],
         files={"data": (filename, file_bytes)},
         timeout=90,
         verify=CA_BUNDLE,
@@ -93,15 +113,14 @@ def upload_image_to_max(file_bytes, filename):
             f"{upload_response.status_code}: {upload_result}"
         )
 
-    # MAX image uploads commonly return photos.photoIds.token.
-    token = (
-        upload_result.get("photos", {})
-        .get("photoIds", {})
-        .get("token")
-        or upload_result.get("token")
-    )
+    # Depending on the API response version, token may be in either response,
+    # including nested photos/photoIds objects.
+    token = _find_media_token(upload_result) or _find_media_token(upload_info)
     if not token:
-        raise RuntimeError(f"MAX не вернул токен загруженного изображения: {upload_result}")
+        raise RuntimeError(
+            f"MAX не вернул токен изображения. Ответ загрузки: {upload_result}; "
+            f"ответ /uploads: {upload_info}"
+        )
     return token
 
 
@@ -226,7 +245,7 @@ def main():
                     photos = message.get("photo") or []
                     if photos:
                         # Telegram lists photo sizes from smallest to largest.
-                        photo = max(photos, key=lambda item: item.get("file_size", 0))
+                        photo = max(photos, key=lambda item: (item.get("file_size", 0), item.get("width", 0) * item.get("height", 0)))
                         image_bytes, filename = telegram_file_bytes(photo["file_id"])
                         image_token = upload_image_to_max(image_bytes, filename)
                         attachments.append({
