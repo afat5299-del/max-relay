@@ -21,7 +21,22 @@ except ValueError:
 
 TG_API = f"https://api.telegram.org/bot{TG_BOT_TOKEN}"
 MAX_API = "https://platform-api2.max.ru"
+from pathlib import Path
 
+BASE_DIR = Path(__file__).resolve().parent
+CUSTOM_CA = BASE_DIR / "mincifry_bundle.pem"
+COMBINED_CA = BASE_DIR / "combined-ca-bundle.pem"
+
+if not CUSTOM_CA.exists():
+    raise SystemExit("Не найден файл mincifry_bundle.pem")
+
+COMBINED_CA.write_bytes(
+    Path(certifi.where()).read_bytes()
+    + b"\n"
+    + CUSTOM_CA.read_bytes()
+)
+
+CA_BUNDLE = str(COMBINED_CA)
 
 def telegram_api(method, data=None, timeout=35):
     response = requests.post(f"{TG_API}/{method}", data=data or {}, timeout=timeout, verify=certifi.where())
@@ -40,7 +55,7 @@ def send_to_max(text):
         headers={"Authorization": MAX_TOKEN, "Content-Type": "application/json"},
         json={"text": text},
         timeout=35,
-        verify=certifi.where(),
+        verify=CA_BUNDLE,
     )
     try:
         payload = response.json()
@@ -59,7 +74,7 @@ def main():
         f"{MAX_API}/me",
         headers={"Authorization": MAX_TOKEN},
         timeout=25,
-        verify=certifi.where(),
+        verify=CA_BUNDLE,
     )
     try:
         info = response.json()
