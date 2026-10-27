@@ -165,6 +165,42 @@ def telegram_text_to_max_html(text, entities=None):
     return "".join(parts)
 
 
+
+def replace_channel_footer(text, entities):
+    """Swap the two known footer links and their visible labels for MAX posts."""
+    if not text or not entities:
+        return text, entities
+
+    telegram_url = "https://t.me/+zOfQvQP-qcxmZjcy"
+    max_url = "https://max.ru/channel_skidochnayapromo"
+    has_telegram_link = any(e.get("type") == "text_link" and e.get("url", "").rstrip("/") == telegram_url.rstrip("/") for e in entities)
+    has_max_link = any(e.get("type") == "text_link" and e.get("url", "").rstrip("/") == max_url.rstrip("/") for e in entities)
+    # Avoid modifying unrelated posts that happen to contain similar words.
+    if not (has_telegram_link and has_max_link):
+        return text, entities
+
+    text = text.replace("Наш канал в Max", "Наш канал в Телеграм")
+    updated = [dict(e) for e in entities]
+    for entity in updated:
+        if entity.get("type") != "text_link":
+            continue
+        url = entity.get("url", "").rstrip("/")
+        if url == telegram_url.rstrip("/"):
+            entity["url"] = max_url
+            label = "Подписаться на наш канал"
+        elif url == max_url.rstrip("/"):
+            entity["url"] = telegram_url
+            label = "Наш канал в Телеграм"
+        else:
+            continue
+        # Recalculate offsets because the second label becomes longer.
+        pos = text.rfind(label)
+        if pos >= 0:
+            entity["offset"] = len(text[:pos].encode("utf-16-le")) // 2
+            entity["length"] = len(label.encode("utf-16-le")) // 2
+    return text, updated
+
+
 def send_to_max(text, attachments=None, formatted=False):
     """Send a text and optional attachments to MAX."""
     body = {}
@@ -238,6 +274,7 @@ def main():
                     continue
                 text = message.get("text") or message.get("caption") or ""
                 entities = message.get("entities") or message.get("caption_entities") or []
+                text, entities = replace_channel_footer(text, entities)
                 max_text = telegram_text_to_max_html(text, entities)
 
                 try:
