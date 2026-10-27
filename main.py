@@ -3,7 +3,6 @@ import time
 import html
 import requests
 from dotenv import load_dotenv
-from max import MaxClient
 
 load_dotenv()
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "").strip()
@@ -12,14 +11,15 @@ MAX_TOKEN = os.getenv("MAX_TOKEN", "").strip()
 MAX_CHAT_ID = os.getenv("MAX_CHAT_ID", "").strip()
 
 if not all([TG_BOT_TOKEN, TG_SOURCE_CHAT_ID, MAX_TOKEN, MAX_CHAT_ID]):
-    raise SystemExit("Заполните TG_BOT_TOKEN, TG_SOURCE_CHAT_ID, MAX_TOKEN и MAX_CHAT_ID в файле .env")
+    raise SystemExit("Заполните TG_BOT_TOKEN, TG_SOURCE_CHAT_ID, MAX_TOKEN и MAX_CHAT_ID в переменных окружения Bothost")
 
 try:
     MAX_CHAT_ID = int(MAX_CHAT_ID)
 except ValueError:
-    raise SystemExit("MAX_CHAT_ID должен быть числом — ID чата MAX")
+    raise SystemExit("MAX_CHAT_ID должен быть числовым ID чата или канала MAX")
 
 TG_API = f"https://api.telegram.org/bot{TG_BOT_TOKEN}"
+MAX_API = "https://platform-api2.max.ru"
 
 
 def telegram_api(method, data=None, timeout=35):
@@ -31,14 +31,42 @@ def telegram_api(method, data=None, timeout=35):
     return result["result"]
 
 
-def main():
-    print("Подключаемся к MAX…")
-    max_client = MaxClient(token=MAX_TOKEN)
-    max_client.run()
-    time.sleep(2)
-    print("MAX подключён. Начинаем проверять сообщения Telegram.")
+def send_to_max(text):
+    """Send plain text to MAX using the official Chatbot API."""
+    response = requests.post(
+        f"{MAX_API}/messages",
+        params={"chat_id": MAX_CHAT_ID},
+        headers={"Authorization": MAX_TOKEN, "Content-Type": "application/json"},
+        json={"text": text},
+        timeout=35,
+    )
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = response.text[:1000]
+    if not response.ok:
+        # Avoid printing the token; response body is safe to inspect unless MAX includes sensitive data.
+        raise RuntimeError(f"MAX API HTTP {response.status_code}: {payload}")
+    return payload
 
-    # При первом запуске берём только новые сообщения, чтобы не переслать старую историю.
+
+def main():
+    print("Проверяем токен официального API MAX…")
+    # GET /me validates the bot token and returns the bot profile.
+    response = requests.get(
+        f"{MAX_API}/me",
+        headers={"Authorization": MAX_TOKEN},
+        timeout=25,
+    )
+    try:
+        info = response.json()
+    except ValueError:
+        info = response.text[:1000]
+    if not response.ok:
+        raise SystemExit(f"Не удалось авторизоваться в официальном API MAX (HTTP {response.status_code}): {info}")
+    print("Авторизация MAX успешна. Начинаем проверять новые сообщения Telegram.")
+
+    # Skip old queued updates on first start to avoid forwarding history.
     updates = telegram_api("getUpdates", {"timeout": 0, "allowed_updates": '["message", "channel_post"]'})
     offset = max((item["update_id"] for item in updates), default=0) + 1
 
@@ -62,15 +90,13 @@ def main():
                     if message.get("photo") or message.get("document") or message.get("video"):
                         print("Пропущено сообщение с медиа без подписи: передача фотографий/файлов пока не реализована.")
                     continue
-                # Пересылаем обычный текст и подпись к медиа как текст. HTML Telegram не переносим в MAX.
                 try:
-                    max_client.send_message(MAX_CHAT_ID, html.unescape(text))
-                    print(f"Переслано Telegram update_id={update['update_id']} в MAX chat_id={MAX_CHAT_ID}")
+                    send_to_max(html.unescape(text))
+                    print(f"Переслан текст Telegram update_id={update['update_id']} в MAX chat_id={MAX_CHAT_ID}")
                 except Exception as exc:
                     print(f"Ошибка отправки в MAX: {exc}")
         except KeyboardInterrupt:
             print("Остановка по команде пользователя.")
-            max_client.stop()
             break
         except Exception as exc:
             print(f"Ошибка цикла: {exc}. Повтор через 5 секунд.")
