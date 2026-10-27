@@ -2,6 +2,7 @@ import os
 import time
 import html
 import requests
+import certifi
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,7 +24,7 @@ MAX_API = "https://platform-api2.max.ru"
 
 
 def telegram_api(method, data=None, timeout=35):
-    response = requests.post(f"{TG_API}/{method}", data=data or {}, timeout=timeout)
+    response = requests.post(f"{TG_API}/{method}", data=data or {}, timeout=timeout, verify=certifi.where())
     response.raise_for_status()
     result = response.json()
     if not result.get("ok"):
@@ -39,6 +40,7 @@ def send_to_max(text):
         headers={"Authorization": MAX_TOKEN, "Content-Type": "application/json"},
         json={"text": text},
         timeout=35,
+        verify=certifi.where(),
     )
     try:
         payload = response.json()
@@ -57,6 +59,7 @@ def main():
         f"{MAX_API}/me",
         headers={"Authorization": MAX_TOKEN},
         timeout=25,
+        verify=certifi.where(),
     )
     try:
         info = response.json()
