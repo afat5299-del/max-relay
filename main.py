@@ -236,9 +236,58 @@ def send_to_max(text, attachments=None, formatted=False):
         raise RuntimeError(f"MAX API HTTP {response.status_code}: {payload}")
 
 
+def forward_telegram_post(messages, update_id=None):
+    """Forward one Telegram post, including every image in a media group, as one MAX message."""
+    if not messages:
+        return
+
+    # Telegram sends an album as several messages with the same media_group_id.
+    # The caption and its entities are normally attached to only one item.
+    text_message = next(
+        (item for item in messages if item.get("text") or item.get("caption")),
+        messages[0],
+    )
+    text = text_message.get("text") or text_message.get("caption") or ""
+    entities = text_message.get("entities") or text_message.get("caption_entities") or []
+    text, entities = replace_channel_footer(text, entities)
+    max_text = telegram_text_to_max_html(text, entities)
+
+    attachments = []
+    for message in messages:
+        photos = message.get("photo") or []
+        if not photos:
+            continue
+        # Telegram lists photo sizes from smallest to largest; upload only the best one.
+        photo = max(
+            photos,
+            key=lambda item: (
+                item.get("file_size", 0),
+                item.get("width", 0) * item.get("height", 0),
+            ),
+        )
+        image_bytes, filename = telegram_file_bytes(photo["file_id"])
+        image_token = upload_image_to_max(image_bytes, filename)
+        attachments.append({"type": "image", "payload": {"token": image_token}})
+
+    if max_text.strip() or attachments:
+        send_to_max(max_text, attachments=attachments, formatted=bool(max_text))
+        label = f"update_id={update_id}" if update_id is not None else f"media_group_id={messages[0].get('media_group_id')}"
+        print(
+            f"Переслан пост Telegram {label} в MAX chat_id={MAX_CHAT_ID}; "
+            f"изображений: {len(attachments)}"
+        )
+    else:
+        for message in messages:
+            if message.get("document") or message.get("video"):
+                print(
+                    "Сообщение содержит документ или видео; пока реализована "
+                    "пересылка текста, гиперссылок и изображений."
+                )
+                break
+
+
 def main():
     print("Проверяем токен официального API MAX…")
-    # GET /me validates the bot token and returns the bot profile.
     response = requests.get(
         f"{MAX_API}/me",
         headers={"Authorization": MAX_TOKEN},
@@ -257,13 +306,18 @@ def main():
     updates = telegram_api("getUpdates", {"timeout": 0, "allowed_updates": '["message", "channel_post"]'})
     offset = max((item["update_id"] for item in updates), default=0) + 1
 
+    # Buffer album parts briefly so all images can be sent in one MAX message.
+    pending_groups = {}
+    group_wait_seconds = 1.5
+
     while True:
         try:
             updates = telegram_api("getUpdates", {
                 "offset": offset,
-                "timeout": 25,
+                "timeout": 2,
                 "allowed_updates": '["message", "channel_post"]'
-            }, timeout=35)
+            }, timeout=10)
+            now = time.monotonic()
             for update in updates:
                 offset = update["update_id"] + 1
                 message = update.get("channel_post") or update.get("message")
@@ -272,38 +326,35 @@ def main():
                 chat = message.get("chat", {})
                 if str(chat.get("id")) != TG_SOURCE_CHAT_ID:
                     continue
-                text = message.get("text") or message.get("caption") or ""
-                entities = message.get("entities") or message.get("caption_entities") or []
-                text, entities = replace_channel_footer(text, entities)
-                max_text = telegram_text_to_max_html(text, entities)
+
+                group_id = message.get("media_group_id")
+                if group_id and message.get("photo"):
+                    key = f"{chat.get('id')}:{group_id}"
+                    if key not in pending_groups:
+                        pending_groups[key] = {"messages": [], "last_seen": now, "update_id": update["update_id"]}
+                    pending_groups[key]["messages"].append(message)
+                    pending_groups[key]["last_seen"] = now
+                    pending_groups[key]["update_id"] = update["update_id"]
+                    continue
 
                 try:
-                    attachments = []
-                    photos = message.get("photo") or []
-                    if photos:
-                        # Telegram lists photo sizes from smallest to largest.
-                        photo = max(photos, key=lambda item: (item.get("file_size", 0), item.get("width", 0) * item.get("height", 0)))
-                        image_bytes, filename = telegram_file_bytes(photo["file_id"])
-                        image_token = upload_image_to_max(image_bytes, filename)
-                        attachments.append({
-                            "type": "image",
-                            "payload": {"token": image_token},
-                        })
-
-                    # Forward text-only posts, photos with captions, and photos without captions.
-                    if max_text.strip() or attachments:
-                        send_to_max(max_text, attachments=attachments, formatted=bool(max_text))
-                        print(
-                            f"Переслан пост Telegram update_id={update['update_id']} "
-                            f"в MAX chat_id={MAX_CHAT_ID}"
-                        )
-                    elif message.get("document") or message.get("video"):
-                        print(
-                            "Сообщение содержит документ или видео; пока реализована "
-                            "пересылка текста, гиперссылок и изображений."
-                        )
+                    forward_telegram_post([message], update_id=update["update_id"])
                 except Exception as exc:
                     print(f"Ошибка отправки в MAX: {exc}")
+
+            # Flush albums only after no new part has arrived for a short interval.
+            now = time.monotonic()
+            ready = [
+                key for key, group in pending_groups.items()
+                if now - group["last_seen"] >= group_wait_seconds
+            ]
+            for key in ready:
+                group = pending_groups.pop(key)
+                try:
+                    forward_telegram_post(group["messages"], update_id=group["update_id"])
+                except Exception as exc:
+                    print(f"Ошибка отправки альбома {key} в MAX: {exc}")
+
         except KeyboardInterrupt:
             print("Остановка по команде пользователя.")
             break
