@@ -1,54 +1,81 @@
-from max import MaxClient as Client
-from filters import filters
-from classes import Message
-from telegram import send_to_telegram
-import time, os
+import os
+import time
+import html
+import requests
 from dotenv import load_dotenv
+from max import MaxClient
 
 load_dotenv()
+TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "").strip()
+TG_SOURCE_CHAT_ID = os.getenv("TG_SOURCE_CHAT_ID", "").strip()
+MAX_TOKEN = os.getenv("MAX_TOKEN", "").strip()
+MAX_CHAT_ID = os.getenv("MAX_CHAT_ID", "").strip()
 
-MAX_TOKEN = os.getenv("MAX_TOKEN")
-MAX_CHAT_IDS = [int(x) for x in os.getenv("MAX_CHAT_IDS").split(",")]
+if not all([TG_BOT_TOKEN, TG_SOURCE_CHAT_ID, MAX_TOKEN, MAX_CHAT_ID]):
+    raise SystemExit("Заполните TG_BOT_TOKEN, TG_SOURCE_CHAT_ID, MAX_TOKEN и MAX_CHAT_ID в файле .env")
 
-TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
-TG_CHAT_ID = os.getenv("TG_CHAT_ID")
-if MAX_TOKEN == "" or MAX_CHAT_IDS == [] or TG_BOT_TOKEN == "" or TG_CHAT_ID == "":
-    print("Ошибка в .env, перепроверьтье")
-MONITOR_ID = os.getenv("MONITOR_ID")
-client = Client(MAX_TOKEN)
+try:
+    MAX_CHAT_ID = int(MAX_CHAT_ID)
+except ValueError:
+    raise SystemExit("MAX_CHAT_ID должен быть числом — ID чата MAX")
 
-@client.on_connect
-def onconnect():
-    if client.me != None:
-        print(f"Имя: {client.me.contact.names[0].name}, Номер: {client.me.contact.phone} | ID: {client.me.contact.id}")
+TG_API = f"https://api.telegram.org/bot{TG_BOT_TOKEN}"
 
 
-@client.on_message(filters.any())
-def onmessage(client: Client, message: Message):
-    if message.chat.id in MAX_CHAT_IDS and message.status != "REMOVED":
-        msg_text = message.text
-        msg_attaches = message.attaches
-        name = message.user.contact.names[0].name
-        if "link" in message.kwargs.keys():
-            if "type" in message.kwargs["link"]:
-                if message.kwargs["link"]["type"] == "REPLY": # TODO
-                    ...
-                if message.kwargs["link"]["type"] == "FORWARD":
-                    msg_text = message.kwargs["link"]["message"]["text"]
-                    msg_attaches = message.kwargs["link"]["message"]["attaches"]
-                    forwarded_msg_author = client.get_user(id=message.kwargs["link"]["message"]["sender"], _f=1)
-                    name = f"{name}\n(Переслано: {forwarded_msg_author.contact.names[0].name})"
+def telegram_api(method, data=None, timeout=35):
+    response = requests.post(f"{TG_API}/{method}", data=data or {}, timeout=timeout)
+    response.raise_for_status()
+    result = response.json()
+    if not result.get("ok"):
+        raise RuntimeError(f"Telegram API {method}: {result}")
+    return result["result"]
 
-        if msg_text != "" or msg_attaches != []:
-            send_to_telegram(
-                TG_BOT_TOKEN,
-                TG_CHAT_ID,
-                f"<b>{name}</b>\n{msg_text}" if msg_text != "" else f"<b>{name}</b>",
-                msg_attaches
-                # [attach['baseUrl'] for attach in msg_attaches if 'baseUrl' in attach]
-            )
-import threading
 
-client.run()
+def main():
+    print("Подключаемся к MAX…")
+    max_client = MaxClient(token=MAX_TOKEN)
+    max_client.run()
+    time.sleep(2)
+    print("MAX подключён. Начинаем проверять сообщения Telegram.")
 
-threading.Event().wait()
+    # При первом запуске берём только новые сообщения, чтобы не переслать старую историю.
+    updates = telegram_api("getUpdates", {"timeout": 0, "allowed_updates": '["message", "channel_post"]'})
+    offset = max((item["update_id"] for item in updates), default=0) + 1
+
+    while True:
+        try:
+            updates = telegram_api("getUpdates", {
+                "offset": offset,
+                "timeout": 25,
+                "allowed_updates": '["message", "channel_post"]'
+            }, timeout=35)
+            for update in updates:
+                offset = update["update_id"] + 1
+                message = update.get("channel_post") or update.get("message")
+                if not message:
+                    continue
+                chat = message.get("chat", {})
+                if str(chat.get("id")) != TG_SOURCE_CHAT_ID:
+                    continue
+                text = message.get("text") or message.get("caption") or ""
+                if not text.strip():
+                    if message.get("photo") or message.get("document") or message.get("video"):
+                        print("Пропущено сообщение с медиа без подписи: передача фотографий/файлов пока не реализована.")
+                    continue
+                # Пересылаем обычный текст и подпись к медиа как текст. HTML Telegram не переносим в MAX.
+                try:
+                    max_client.send_message(MAX_CHAT_ID, html.unescape(text))
+                    print(f"Переслано Telegram update_id={update['update_id']} в MAX chat_id={MAX_CHAT_ID}")
+                except Exception as exc:
+                    print(f"Ошибка отправки в MAX: {exc}")
+        except KeyboardInterrupt:
+            print("Остановка по команде пользователя.")
+            max_client.stop()
+            break
+        except Exception as exc:
+            print(f"Ошибка цикла: {exc}. Повтор через 5 секунд.")
+            time.sleep(5)
+
+
+if __name__ == "__main__":
+    main()
